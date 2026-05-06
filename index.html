@@ -1,0 +1,505 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HT PROJEKT · Kalkulator PV + BESS</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = { theme: { extend: { colors: {
+    htblue:  { 50:"#eef3fa", 100:"#d6e1f1", 500:"#3765AD", 600:"#2c528a", 700:"#1F4181", 900:"#13284f" },
+    htamber: { 50:"#fff8eb", 500:"#F59E0B", 600:"#d18509" }
+  }}}}
+</script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  body { font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  .step-active { background:#3765AD; color:white; }
+  .step-done   { background:#1F4181; color:white; }
+  .step-todo   { background:#e5e7eb; color:#6b7280; }
+  .kpi-card { transition: transform .15s ease; }
+  .kpi-card:hover { transform: translateY(-2px); }
+  @media print { .no-print { display:none !important; } }
+  .mode-card { transition: all .2s; }
+  .mode-card.selected { border-color:#3765AD; background:#eef3fa; }
+  .file-drop { border:2px dashed #cbd5e1; transition:all .2s; }
+  .file-drop.dragover { border-color:#3765AD; background:#eef3fa; }
+</style>
+</head>
+<body class="bg-slate-50 min-h-screen">
+
+<header class="bg-white border-b border-slate-200 no-print">
+  <div class="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <svg viewBox="0 0 109.917 49.711" class="h-10 w-auto" xmlns="http://www.w3.org/2000/svg">
+        <g>
+          <rect x="74.849" y="20.303" transform="matrix(0.6969 0.7172 -0.7172 0.6969 39.0388 -48.2534)" fill="#3765AD" width="3.504" height="3.504"/>
+          <path fill="#3765AD" d="M51.451,3.838v6.605h-6.605V3.838H51.451z M36.517,3.838v6.605h-6.605V3.838H36.517z M59.76,11.295h6.605V17.9H59.76V11.295z M51.451,11.295V17.9h-6.605v-6.605h1.331H51.451z M31.242,11.295h5.275V17.9h-6.605v-6.605H31.242z M58.908,11.295V17.9h-6.604v-6.605H58.908z M43.973,11.295V17.9h-6.605v-6.605H43.973z M58.908,18.752v6.605h-6.604v-6.605h1.331H58.908z M43.973,18.752v6.605h-6.605v-6.605h1.331H43.973z M52.303,10.443h14.488c0.235,0,0.426,0.191,0.426,0.426V17.9h7.031c0.235,0,0.426,0.191,0.426,0.426v1.783l-0.852,0.828v-2.186h-6.605v6.605h6.605v-2.233l0.852,0.877v1.782c0,0.236-0.191,0.426-0.426,0.426h-7.457c-0.236,0-0.426-0.189-0.426-0.426v-7.031H59.76v7.031c0,0.236-0.19,0.426-0.425,0.426h-7.458c-0.235,0-0.426-0.189-0.426-0.426v-7.031h-6.626v7.031c0,0.236-0.19,0.426-0.426,0.426h-7.457c-0.235,0-0.426-0.189-0.426-0.426v-7.031h-7.032c-0.235,0-0.426-0.19-0.426-0.425V3.412c0-0.235,0.191-0.425,0.426-0.425h7.458c0.235,0,0.425,0.19,0.425,0.425v7.032h6.626V3.412c0-0.235,0.19-0.425,0.426-0.425h7.457c0.235,0,0.426,0.19,0.426,0.425V10.443z"/>
+          <polygon fill="#3765AD" points="11.61,34.528 11.61,38.999 6.458,38.999 6.458,34.528 3.835,34.528 3.835,45.864 6.458,45.864 6.458,41.216 11.61,41.216 11.61,45.864 14.232,45.864 14.232,34.528"/>
+          <polygon fill="#3765AD" points="19.271,45.864 21.893,45.864 21.893,36.665 25.521,36.665 25.521,34.528 15.643,34.528 15.643,36.665 19.271,36.665"/>
+          <path fill="#3765AD" d="M36.229,41.233h-3.013v-5.672h3.013c2.269,0,3.467,1.037,3.467,2.854C39.696,40.196,38.497,41.233,36.229,41.233z M36.261,34.528h-4.242v11.336h1.197v-3.58h3.045c2.885,0,4.631-1.455,4.631-3.869C40.892,35.983,39.146,34.528,36.261,34.528z"/>
+          <path fill="#3765AD" d="M47.662,41.249h-3.014v-5.688h3.014c2.268,0,3.467,1.037,3.467,2.854C51.129,40.196,49.93,41.249,47.662,41.249z M52.503,45.864l-2.768-3.887c1.652-0.533,2.59-1.781,2.59-3.563c0-2.432-1.748-3.887-4.632-3.887h-4.243v11.336h1.197v-3.596h3.046c0.324,0,0.616-0.016,0.908-0.049l2.592,3.645H52.503z"/>
+          <path fill="#3765AD" d="M60.117,44.894c-2.738,0-4.778-1.992-4.778-4.697s2.041-4.699,4.778-4.699c2.722,0,4.747,1.994,4.747,4.699S62.839,44.894,60.117,44.894z M60.117,45.962c3.403,0,5.944-2.445,5.944-5.766c0-3.322-2.541-5.766-5.944-5.766c-3.434,0-5.959,2.461-5.959,5.766S56.683,45.962,60.117,45.962z"/>
+          <path fill="#3765AD" d="M69.672,45.962c2.17,0,3.302-1.182,3.302-3.578v-7.855h-5.327v1.033h4.147v6.871c0,1.668-0.713,2.494-2.107,2.494c-1.003,0-1.83-0.486-2.445-1.393l-0.713,0.809C67.226,45.38,68.392,45.962,69.672,45.962z"/>
+          <polygon fill="#3765AD" points="77.769,44.829 77.769,40.616 83.631,40.616 83.631,39.597 77.769,39.597 77.769,35.562 84.344,35.562 84.344,34.528 76.572,34.528 76.572,45.864 84.587,45.864 84.587,44.829"/>
+          <polygon fill="#3765AD" points="95.553,45.864 96.978,45.864 91.729,39.661 96.638,34.528 95.261,34.528 88.604,41.378 88.604,34.528 87.407,34.528 87.407,45.864 88.604,45.864 88.604,42.884 90.921,40.536"/>
+          <polygon fill="#3765AD" points="100.34,45.864 101.537,45.864 101.537,35.562 105.521,35.562 105.521,34.528 96.355,34.528 96.355,35.562 100.34,35.562"/>
+        </g>
+      </svg>
+      <div>
+        <div class="text-xs text-slate-500">HT PROJEKT</div>
+        <h1 class="text-lg font-bold text-htblue-700">Kalkulator PV + BESS</h1>
+      </div>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="btnReset" class="px-3 py-2 text-sm border border-slate-300 rounded hover:bg-slate-100">↺ Reset</button>
+      <button id="btnPDF" class="px-3 py-2 text-sm bg-htblue-500 text-white rounded hover:bg-htblue-600 disabled:opacity-40" disabled>📄 PDF</button>
+    </div>
+  </div>
+</header>
+
+<nav class="bg-white border-b border-slate-200 no-print">
+  <div class="max-w-7xl mx-auto px-6 py-3 flex items-center gap-2 overflow-x-auto">
+    <div id="step-1" class="step-active px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap">1 · Tryby</div>
+    <span class="text-slate-300">→</span>
+    <div id="step-2" class="step-todo px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap">2 · Klient + taryfa</div>
+    <span class="text-slate-300">→</span>
+    <div id="step-3" class="step-todo px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap">3 · Profil</div>
+    <span class="text-slate-300">→</span>
+    <div id="step-4" class="step-todo px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap">4 · PV + BESS</div>
+    <span class="text-slate-300">→</span>
+    <div id="step-5" class="step-todo px-4 py-2 rounded-full text-sm font-medium whitespace-nowrap">5 · Wyniki</div>
+  </div>
+</nav>
+
+<main id="main" class="max-w-7xl mx-auto px-6 py-8">
+
+<!-- ===== STEP 1: TRYBY ===== -->
+<section id="section-1" class="space-y-4">
+  <h2 class="text-2xl font-bold text-htblue-700">Tryby pracy magazynu energii</h2>
+  <p class="text-slate-600">Zaznacz wszystkie scenariusze, które chcesz uwzględnić w wyliczeniu. Strumienie oszczędności sumują się; wspólne strumienie liczone są raz.</p>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
+
+    <label class="mode-card border-2 border-slate-200 rounded-lg p-5 cursor-pointer flex gap-4 hover:border-htblue-500 selected">
+      <input type="checkbox" name="mode" value="pv_bess_classic" class="mt-1" checked />
+      <div class="flex-1">
+        <div class="font-bold text-lg">PV + BESS klasyczny</div>
+        <div class="text-sm text-slate-600 mt-1">Autokonsumpcja PV, sprzedaż nadwyżek po RCEm, arbitraż dzień/noc.</div>
+        <div class="text-xs text-htblue-700 mt-2">+ Autokonsumpcja PV · + RCEm · + Arbitraż BESS</div>
+      </div>
+    </label>
+
+    <label class="mode-card border-2 border-slate-200 rounded-lg p-5 cursor-pointer flex gap-4 hover:border-htblue-500 selected">
+      <input type="checkbox" name="mode" value="strażnik_mocy" class="mt-1" checked />
+      <div class="flex-1">
+        <div class="font-bold text-lg">Strażnik mocy / peak shaving <span class="text-xs bg-htamber-50 text-htamber-600 px-2 py-0.5 rounded">★ flagowy</span></div>
+        <div class="text-sm text-slate-600 mt-1">BESS chroni przed przekroczeniem mocy umownej, obniża K3/K4 → K2/K1, eliminuje kary.</div>
+        <div class="text-xs text-htblue-700 mt-2">+ Obniżenie mocy · + Kary · + Reklasyfikacja K</div>
+      </div>
+    </label>
+
+    <label class="mode-card border-2 border-slate-200 rounded-lg p-5 cursor-pointer flex gap-4 hover:border-htblue-500">
+      <input type="checkbox" name="mode" value="arbitraz_tge" class="mt-1" />
+      <div class="flex-1">
+        <div class="font-bold text-lg">Arbitraż TGE / SPOT</div>
+        <div class="text-sm text-slate-600 mt-1">Zwiększony spread cenowy (taryfa SPOT, więcej cykli rocznie).</div>
+        <div class="text-xs text-htblue-700 mt-2">↑ Arbitraż BESS</div>
+      </div>
+    </label>
+
+    <label class="mode-card border-2 border-slate-200 rounded-lg p-5 cursor-pointer flex gap-4 hover:border-htblue-500">
+      <input type="checkbox" name="mode" value="dsr_rynek_mocy" class="mt-1" />
+      <div class="flex-1">
+        <div class="font-bold text-lg">DSR / Rynek Mocy <span class="text-xs bg-slate-200 text-slate-700 px-2 py-0.5 rounded">≥ 1 MW</span></div>
+        <div class="text-sm text-slate-600 mt-1">Sprzedaż gotowości mocy do PSE i usługi systemowe.</div>
+        <div class="text-xs text-htblue-700 mt-2">+ Rynek Mocy · + DSR · + FCR/aFRR</div>
+      </div>
+    </label>
+
+  </div>
+  <div class="flex justify-end mt-6">
+    <button id="btn-next-1" class="px-6 py-3 bg-htblue-500 text-white rounded-lg font-medium hover:bg-htblue-600">Dalej →</button>
+  </div>
+</section>
+
+<!-- ===== STEP 2: KLIENT + TARYFA ===== -->
+<section id="section-2" class="space-y-4 hidden">
+  <h2 class="text-2xl font-bold text-htblue-700">Klient i taryfa</h2>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Nazwa klienta</label>
+      <input id="in-client-name" type="text" placeholder="np. Hala produkcyjna XYZ Sp. z o.o." class="w-full border border-slate-300 rounded px-3 py-2" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Województwo (uzysk PV)</label>
+      <select id="in-voivodeship" class="w-full border border-slate-300 rounded px-3 py-2">
+        <option value="pomorskie">Pomorskie</option><option value="zachodniopomorskie">Zachodniopomorskie</option>
+        <option value="warminsko_mazurskie">Warmińsko-mazurskie</option><option value="podlaskie">Podlaskie</option>
+        <option value="mazowieckie" selected>Mazowieckie</option><option value="lodzkie">Łódzkie</option>
+        <option value="lubelskie">Lubelskie</option><option value="podkarpackie">Podkarpackie</option>
+        <option value="swietokrzyskie">Świętokrzyskie</option><option value="malopolskie">Małopolskie</option>
+        <option value="slaskie">Śląskie</option><option value="opolskie">Opolskie</option>
+        <option value="dolnoslaskie">Dolnośląskie</option><option value="lubuskie">Lubuskie</option>
+        <option value="wielkopolskie">Wielkopolskie</option><option value="kujawsko_pomorskie">Kujawsko-pomorskie</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Taryfa dystrybucyjna</label>
+      <select id="in-tariff" class="w-full border border-slate-300 rounded px-3 py-2">
+        <optgroup label="B (>40 kW SN)"><option>B11</option><option>B21</option><option>B22</option><option>B23</option></optgroup>
+        <optgroup label="C (≤40 kW nN)"><option>C11</option><option>C12A</option><option>C12B</option><option>C21</option><option>C22A</option><option selected>C22B</option><option>C23</option></optgroup>
+        <optgroup label="G (gospodarstwo)"><option>G11</option><option>G12</option><option>G12W</option></optgroup>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Moc umowna [kW]</label>
+      <input id="in-moc-umowna" type="number" value="50" min="1" class="w-full border border-slate-300 rounded px-3 py-2" />
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Współczynnik K (opłata mocowa)</label>
+      <select id="in-k-coef" class="w-full border border-slate-300 rounded px-3 py-2">
+        <option value="K1">K1 (&lt;5%)</option>
+        <option value="K2">K2 (5-15%)</option>
+        <option value="K3" selected>K3 (15-40%)</option>
+        <option value="K4">K4 (&gt;40%)</option>
+      </select>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Kategoria odbiorcy (do dotacji)</label>
+      <select id="in-target" class="w-full border border-slate-300 rounded px-3 py-2">
+        <option value="MSP">MŚP</option><option value="MSP_wiejski">MŚP wiejski / rolnik</option>
+        <option value="rolnik">Rolnik / spółdzielnia rolnicza</option><option value="JST">JST / samorząd</option>
+        <option value="wspolnota_mieszkaniowa">Wspólnota mieszkaniowa</option>
+        <option value="midcap">Mid-cap (&gt;500 osób)</option><option value="przedsiebiorca">Duży przedsiębiorca</option>
+      </select>
+    </div>
+  </div>
+
+  <h3 class="text-lg font-bold text-htblue-700 mt-6">Produkt energetyczny klienta</h3>
+  <div class="bg-htblue-50 border border-htblue-100 rounded-lg p-4">
+    <label class="block text-sm font-medium text-slate-700 mb-2">Typ kontraktu energii</label>
+    <select id="in-energy-product" class="w-full border border-slate-300 rounded px-3 py-2 mb-3">
+      <option value="FIX" selected>FIX — stała cena całoroczna</option>
+      <option value="SPOT">SPOT / RDN — cena rynkowa zmienna (TGE Rynek Dnia Następnego)</option>
+      <option value="TRANSZE">Transze (Q1+Q2+Q3+Q4) — zakup w transzach kwartalnych</option>
+      <option value="CFD">CFD / hedging — kontrakt różnicowy zabezpieczający</option>
+    </select>
+
+    <div id="energy-fix" class="energy-section">
+      <label class="block text-sm font-medium text-slate-700 mb-1">Cena FIX [zł/MWh netto]</label>
+      <input id="in-price-fix" type="number" value="600" min="0" class="w-full border border-slate-300 rounded px-3 py-2" />
+      <div class="text-xs text-slate-500 mt-1">Stała cena z umowy z sprzedawcą.</div>
+    </div>
+
+    <div id="energy-spot" class="energy-section hidden">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Średnia RDN 2026 [zł/MWh]</label>
+          <input id="in-price-rdn" type="number" value="450" min="0" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Marża sprzedawcy [zł/MWh]</label>
+          <input id="in-price-marza" type="number" value="100" min="0" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+      </div>
+      <div class="text-xs text-slate-500 mt-1">SPOT umożliwia BESS arbitraż — zwiększa cykli rocznie i spread.</div>
+    </div>
+
+    <div id="energy-transze" class="energy-section hidden">
+      <div class="grid grid-cols-4 gap-2">
+        <div><label class="text-xs">Q1 udział %</label><input id="in-tr-q1" type="number" value="25" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q1 cena</label><input id="in-tr-q1-p" type="number" value="580" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q2 udział %</label><input id="in-tr-q2" type="number" value="25" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q2 cena</label><input id="in-tr-q2-p" type="number" value="480" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q3 udział %</label><input id="in-tr-q3" type="number" value="25" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q3 cena</label><input id="in-tr-q3-p" type="number" value="460" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q4 udział %</label><input id="in-tr-q4" type="number" value="25" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+        <div><label class="text-xs">Q4 cena</label><input id="in-tr-q4-p" type="number" value="620" class="w-full border border-slate-300 rounded px-2 py-1.5 text-sm" /></div>
+      </div>
+      <div class="text-xs text-slate-500 mt-2">Suma udziałów = 100%. Średnia ważona = średnia cena efektywna.</div>
+    </div>
+
+    <div id="energy-cfd" class="energy-section hidden">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Cena strike CFD [zł/MWh]</label>
+          <input id="in-price-cfd" type="number" value="550" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Wolumen objęty %</label>
+          <input id="in-cfd-volume" type="number" value="80" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+      </div>
+      <div class="text-xs text-slate-500 mt-1">Reszta wolumenu rozliczana po SPOT — uwzględnia zmienność.</div>
+    </div>
+  </div>
+
+  <div class="flex justify-between mt-6">
+    <button class="btn-back px-6 py-3 border border-slate-300 rounded-lg">← Wstecz</button>
+    <button class="btn-next px-6 py-3 bg-htblue-500 text-white rounded-lg font-medium hover:bg-htblue-600">Dalej →</button>
+  </div>
+</section>
+
+<!-- ===== STEP 3: PROFIL ZUŻYCIA ===== -->
+<section id="section-3" class="space-y-4 hidden">
+  <h2 class="text-2xl font-bold text-htblue-700">Profil zużycia klienta</h2>
+  <p class="text-slate-600">Wybierz metodę: archetyp uproszczony albo wgraj profil rzeczywisty z licznika 15‑min/godzinowy. Przy CSV narzędzie liczy faktyczną liczbę przekroczeń mocy umownej.</p>
+
+  <div class="bg-white border border-slate-200 rounded-lg overflow-hidden">
+    <div class="flex border-b border-slate-200">
+      <button id="tab-archetype" class="flex-1 px-4 py-3 text-sm font-medium bg-htblue-50 text-htblue-700 border-r border-slate-200">A. Archetyp uproszczony</button>
+      <button id="tab-csv" class="flex-1 px-4 py-3 text-sm font-medium hover:bg-slate-50">B. CSV z licznika (15‑min lub godzinowy)</button>
+    </div>
+
+    <div id="panel-archetype" class="p-5 space-y-4">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Roczne zużycie [kWh]</label>
+          <input id="in-yearly" type="number" value="100000" min="1000" class="w-full border border-slate-300 rounded px-3 py-2" />
+          <div class="text-xs text-slate-500 mt-1">Suma z 12 faktur OSD.</div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Archetyp profilu</label>
+          <select id="in-archetype" class="w-full border border-slate-300 rounded px-3 py-2">
+            <option value="hala_8_16">Hala produkcyjna 8-16 (jedna zmiana)</option>
+            <option value="hala_24_7">Hala 24/7 (3 zmiany)</option>
+            <option value="biuro">Biuro</option>
+            <option value="sklep">Sklep / handel</option>
+            <option value="hotel">Hotel / pensjonat</option>
+            <option value="chlodnia">Chłodnia / mroźnia</option>
+            <option value="ferma_drobiu">Ferma drobiu / hodowla</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Szczyt mocy obserwowany [kW]</label>
+          <input id="in-peak" type="number" value="48" min="1" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Liczba przekroczeń mocy umownej / rok</label>
+          <input id="in-przekroczenia" type="number" value="0" min="0" class="w-full border border-slate-300 rounded px-3 py-2" />
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Cel obniżenia mocy umownej (ΔP) [kW]</label>
+        <input id="in-shaving-target" type="range" min="0" max="200" value="20" class="w-full" />
+        <div class="flex justify-between text-xs text-slate-500"><span>0 kW</span><span id="shaving-display">20 kW</span><span>200 kW</span></div>
+      </div>
+    </div>
+
+    <div id="panel-csv" class="p-5 space-y-4 hidden">
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Cel obniżenia mocy umownej (ΔP) [kW]</label>
+          <input id="in-shaving-target-csv" type="range" min="0" max="500" value="20" class="w-full" />
+          <div class="flex justify-between text-xs text-slate-500"><span>0 kW</span><span id="shaving-display-csv">20 kW</span><span>500 kW</span></div>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Format pliku</label>
+          <select id="in-csv-format" class="w-full border border-slate-300 rounded px-3 py-2">
+            <option value="hourly">Godzinowy (8760 wierszy)</option>
+            <option value="quarter" selected>15‑minutowy (35040 wierszy → agregacja do godzin)</option>
+          </select>
+        </div>
+      </div>
+      <div id="csv-drop" class="file-drop rounded-lg p-8 text-center cursor-pointer">
+        <div class="text-3xl mb-2">📊</div>
+        <div class="font-medium text-slate-700">Przeciągnij plik CSV tutaj lub kliknij, aby wybrać</div>
+        <div class="text-xs text-slate-500 mt-2">Oczekiwany format: kolumna z mocą [kW] w kolejności chronologicznej. Akceptujemy też 2 kolumny (timestamp, kW).</div>
+        <input type="file" id="csv-file" accept=".csv,.txt" class="hidden" />
+      </div>
+      <div id="csv-status" class="hidden"></div>
+    </div>
+  </div>
+
+  <div class="flex justify-between mt-6">
+    <button class="btn-back px-6 py-3 border border-slate-300 rounded-lg">← Wstecz</button>
+    <button class="btn-next px-6 py-3 bg-htblue-500 text-white rounded-lg font-medium hover:bg-htblue-600">Dalej →</button>
+  </div>
+</section>
+
+<!-- ===== STEP 4: PV + BESS ===== -->
+<section id="section-4" class="space-y-4 hidden">
+  <h2 class="text-2xl font-bold text-htblue-700">Konfiguracja systemu</h2>
+  <div class="bg-htamber-50 border border-htamber-500 rounded-lg p-4 text-sm">
+    💡 <strong>Tryb auto:</strong> wartości "0" zostaną dobrane automatycznie pod minimalny payback.
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+    <div class="border border-slate-200 rounded-lg p-4">
+      <h3 class="font-bold text-lg mb-3">Fotowoltaika</h3>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Status PV</label>
+      <select id="in-pv-status" class="w-full border border-slate-300 rounded px-3 py-2 mb-3">
+        <option value="brak">Brak (tylko BESS)</option>
+        <option value="planowana" selected>Planowana</option>
+        <option value="istniejaca">Istniejąca</option>
+      </select>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Moc PV [kWp] (0 = auto)</label>
+      <input id="in-pv-kwp" type="number" value="0" min="0" class="w-full border border-slate-300 rounded px-3 py-2 mb-3" />
+      <label class="block text-sm font-medium text-slate-700 mb-1">Typ instalacji</label>
+      <select id="in-pv-type" class="w-full border border-slate-300 rounded px-3 py-2 mb-3">
+        <option value="dach" selected>Dach</option><option value="grunt">Grunt</option>
+      </select>
+      <label class="flex items-center gap-2 text-sm">
+        <input id="in-pv-rcem" type="checkbox" checked /> Sprzedaż nadwyżek po RCEm
+      </label>
+    </div>
+
+    <div class="border border-slate-200 rounded-lg p-4">
+      <h3 class="font-bold text-lg mb-3">Magazyn energii</h3>
+      <label class="block text-sm font-medium text-slate-700 mb-1">Pojemność BESS [kWh] (0 = auto)</label>
+      <input id="in-bess-kwh" type="number" value="0" min="0" class="w-full border border-slate-300 rounded px-3 py-2 mb-3" />
+      <label class="block text-sm font-medium text-slate-700 mb-1">Moc BESS [kW] (0 = pojemność/4h)</label>
+      <input id="in-bess-kw" type="number" value="0" min="0" class="w-full border border-slate-300 rounded px-3 py-2 mb-3" />
+      <label class="block text-sm font-medium text-slate-700 mb-1">Konkretny produkt z katalogu (opcjonalnie)</label>
+      <select id="in-bess-product" class="w-full border border-slate-300 rounded px-3 py-2">
+        <option value="">— wycena per-kWh wg skali —</option>
+      </select>
+    </div>
+  </div>
+
+  <details class="bg-white border border-slate-200 rounded-lg p-4">
+    <summary class="font-bold cursor-pointer text-htblue-700">⚙️ Parametry techniczne BESS (zaawansowane)</summary>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">DOD — głębokość rozładowania %</label>
+        <input id="in-bess-dod" type="number" value="90" min="50" max="100" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Max SOC %</label>
+        <input id="in-bess-maxsoc" type="number" value="95" min="50" max="100" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Min SOC %</label>
+        <input id="in-bess-minsoc" type="number" value="5" min="0" max="50" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Sprawność round-trip %</label>
+        <input id="in-bess-eff" type="number" value="88" min="50" max="100" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Degradacja roczna %</label>
+        <input id="in-bess-degr" type="number" value="3" min="0" max="10" step="0.1" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Cykli rocznie</label>
+        <input id="in-bess-cycles" type="number" value="280" min="50" max="700" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+    </div>
+  </details>
+
+  <details class="bg-white border border-slate-200 rounded-lg p-4">
+    <summary class="font-bold cursor-pointer text-htblue-700">💸 Parametry finansowe</summary>
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Stopa dyskonta %</label>
+        <input id="in-fin-disc" type="number" value="8" min="0" max="30" step="0.5" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Horyzont [lat]</label>
+        <input id="in-fin-years" type="number" value="15" min="5" max="25" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-700 mb-1">Eskalacja cen energii %/rok</label>
+        <input id="in-fin-esc" type="number" value="5" min="-5" max="20" step="0.5" class="w-full border border-slate-300 rounded px-3 py-2 text-sm" />
+      </div>
+    </div>
+  </details>
+
+  <div>
+    <label class="block text-sm font-medium text-slate-700 mb-1 mt-4">Dotacja</label>
+    <select id="in-dotacja" class="w-full border border-slate-300 rounded px-3 py-2">
+      <option value="auto" selected>Auto — dobierz pod profil klienta</option>
+    </select>
+    <div id="dotacja-info" class="text-xs text-slate-600 mt-2"></div>
+  </div>
+
+  <div class="flex justify-between mt-6">
+    <button class="btn-back px-6 py-3 border border-slate-300 rounded-lg">← Wstecz</button>
+    <button id="btn-calculate" class="px-6 py-3 bg-htblue-500 text-white rounded-lg font-medium hover:bg-htblue-600">Policz wyniki →</button>
+  </div>
+</section>
+
+<!-- ===== STEP 5: WYNIKI ===== -->
+<section id="section-5" class="space-y-6 hidden">
+  <div id="results-content" class="space-y-6">
+    <div class="bg-htblue-700 text-white rounded-lg p-5">
+      <div class="text-xs uppercase tracking-wider text-htblue-100">Oferta · HT PROJEKT</div>
+      <div id="hero-client" class="text-2xl font-bold mt-1">—</div>
+      <div id="hero-modes" class="text-sm text-htblue-100 mt-2"></div>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div class="kpi-card bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+        <div class="text-sm text-slate-500">Okres zwrotu</div>
+        <div id="kpi-payback" class="text-3xl font-bold text-htblue-700 mt-1">—</div>
+        <div id="kpi-payback-sub" class="text-xs text-slate-500 mt-1"></div>
+      </div>
+      <div class="kpi-card bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+        <div class="text-sm text-slate-500">NPV (15 lat)</div>
+        <div id="kpi-npv" class="text-3xl font-bold text-htblue-700 mt-1">—</div>
+        <div id="kpi-irr" class="text-xs text-slate-500 mt-1"></div>
+      </div>
+      <div class="kpi-card bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+        <div class="text-sm text-slate-500">Oszczędność miesięcznie (rok 1)</div>
+        <div id="kpi-monthly" class="text-3xl font-bold text-htblue-700 mt-1">—</div>
+        <div class="text-xs text-slate-500 mt-1">średnio</div>
+      </div>
+      <div class="kpi-card bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+        <div class="text-sm text-slate-500">CAPEX po dotacji</div>
+        <div id="kpi-capex" class="text-3xl font-bold text-htblue-700 mt-1">—</div>
+        <div id="kpi-capex-sub" class="text-xs text-slate-500 mt-1"></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Konfiguracja systemu</h3>
+      <div id="config-summary" class="text-sm text-slate-700 grid grid-cols-2 md:grid-cols-4 gap-4"></div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Skąd biorą się oszczędności (rok 1)</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div><canvas id="chart-streams" height="220"></canvas></div>
+        <div id="streams-table" class="text-sm"></div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Inwestycja — rozbicie kosztów</h3>
+      <div id="capex-table" class="text-sm"></div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Skumulowany przepływ gotówki (15 lat)</h3>
+      <canvas id="chart-cashflow" height="200"></canvas>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Jak BESS pracuje w typowy dzień</h3>
+      <canvas id="chart-daily" height="220"></canvas>
+      <div class="text-xs text-slate-500 mt-2">Zielony — produkcja PV. Niebieski — zużycie. Pomarańczowy — stan BESS. Czerwony — moc z sieci.</div>
+    </div>
+
+    <div id="dotacja-summary" class="bg-emerald-50 border border-emerald-200 rounded-lg p-5"></div>
+  </div>
+
+  <div class="flex justify-between mt-6 no-print">
+    <button class="btn-back px-6 py-3 border border-slate-300 rounded-lg">← Wstecz</button>
+    <button id="btn-pdf-bottom" class="px-6 py-3 bg-htblue-500 text-white rounded-lg font-medium hover:bg-htblue-600">📄 Eksportuj PDF</button>
+  </div>
+</section>
+
+</main>
+
+<footer class="max-w-7xl mx-auto px-6 py-6 text-center text-xs text-slate-400 no-print">
+  HT PROJEKT · <a href="https://htprojekt.pl" class="text-htblue-500 hover:underline">htprojekt.pl</a> · Cennik w <code>pricing.js</code>, profile w <code>profiles.js</code>
+</footer>
+
+<script src="pricing.js"></script>
+<script src="profiles.js"></script>
+<script src="engine.js"></script>
+</body>
+</html>
