@@ -478,6 +478,22 @@
     </div>
 
     <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
+      <h3 class="font-bold text-lg mb-3">Praca systemu w cyklu rocznym</h3>
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <div class="text-sm font-medium text-slate-700 mb-2">Pokrycie zużycia (12 miesięcy)</div>
+          <canvas id="chart-yearly-energy" height="220"></canvas>
+          <div class="text-xs text-slate-500 mt-2">Stos pokazuje skąd energia trafia do klienta. Czerwony — zakup z sieci. Zielony — autokonsumpcja PV bezpośrednio. Pomarańczowy — energia z BESS. Niebieska linia (przerywana) — eksport do sieci po RCEm.</div>
+        </div>
+        <div>
+          <div class="text-sm font-medium text-slate-700 mb-2">Koszt energii — przed vs po (12 miesięcy)</div>
+          <canvas id="chart-yearly-cost" height="220"></canvas>
+          <div class="text-xs text-slate-500 mt-2">Czerwone słupki — co klient płaci dziś. Zielone słupki — co zapłaci po BESS+PV. Różnica = miesięczna oszczędność.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-5">
       <h3 class="font-bold text-lg mb-3">Jak BESS pracuje w typowy dzień</h3>
       <canvas id="chart-daily" height="220"></canvas>
       <div class="text-xs text-slate-500 mt-2">Zielony — produkcja PV. Niebieski — zużycie. Pomarańczowy — stan BESS. Czerwony — moc z sieci.</div>

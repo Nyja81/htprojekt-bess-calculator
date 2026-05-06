@@ -162,6 +162,49 @@
   }
 
   // ============================================================
+  //                  KRZYWA CEN RDN — 8760 h
+  // ============================================================
+  // Reprezentuje typowy profil RDN PSE/TGE 2024-2025:
+  //   - intra-day: dno 2-5 (noc), niska 12-15 (PV w lecie),
+  //                szczyt 18-22 (wieczór, zimą bardzo wysoki)
+  //   - sezonowo: zima drożej (grudzień +50%, czerwiec -30%)
+  // Wynik: tablica 8760 wartości w skali względnej (średnia roczna = 1.0).
+  // Mnożone w engine przez `priceRDN` (średnia roczna z cennika).
+  function profile_rdn_relative(t) {
+    // intra-day: cosinus z peak ~19:00, dno ~3:00
+    const hourPhase = ((t.hour - 19) * Math.PI) / 12;
+    const intradayShape = Math.cos(hourPhase);   // -1..1, peak wieczór
+    const intraday = 1 + 0.6 * intradayShape;     // mnożnik 0.4..1.6
+
+    // Sezon: peak grudzień (m=11), dno czerwiec (m=5)
+    const monthPhase = ((t.month - 11) * Math.PI) / 6;
+    const seasonalShape = Math.cos(monthPhase);   // peak zima
+    const seasonal = 1 + 0.35 * seasonalShape;    // mnożnik 0.65..1.35
+
+    // Weekendowo: w niedzielę-święta przemysł stoi, ceny niższe
+    const weekend = (t.isWeekend || t.isHoliday) ? 0.85 : 1.0;
+
+    // Cena ujemna w południe lipca-sierpnia (PV oversupply) — symuluj minimalną nieliniowością
+    let price = intraday * seasonal * weekend;
+    if (t.month >= 5 && t.month <= 8 && t.hour >= 11 && t.hour <= 14) {
+      price *= 0.4;  // dno południowe latem (mocna nadprodukcja PV)
+    }
+    return Math.max(0.1, price);
+  }
+  function build8760RDN() {
+    const arr = new Array(8760);
+    let sum = 0;
+    for (let h = 0; h < 8760; h++) {
+      const t = timeFromHourOfYear(h);
+      arr[h] = profile_rdn_relative(t);
+      sum += arr[h];
+    }
+    const avg = sum / 8760;
+    if (avg > 0) for (let h = 0; h < 8760; h++) arr[h] /= avg;
+    return arr;
+  }
+
+  // ============================================================
   //                  EKSPORT
   // ============================================================
   window.PROFILES = {
@@ -178,6 +221,10 @@
     // Profil produkcji PV (znormalizowany: suma = 1, skalowane przez kWp × uzysk)
     pv: {
       polska_typowa: { label: "Polska — typowy",   generator: build8760PV(52) },
+    },
+    // Krzywa cen RDN (znormalizowana: średnia = 1, skalowana przez priceRDN)
+    rdn: {
+      polska_typowa: { label: "RDN PL — typowy 2025-2026", generator: build8760RDN() },
     },
 
     // Helper: zwróć etykietę ludzką

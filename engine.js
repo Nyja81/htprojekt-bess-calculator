@@ -99,6 +99,212 @@ function pickDotacja(in_, bessKWh, bessKW) {
     || ds.find(d => d.id === "BEZ_DOTACJI");
 }
 
+// =============== SYMULACJA GODZINOWA 8760 h ===============
+// Couple consumption + PV + BESS dla każdej z 8760 h roku.
+// Zwraca: realne autokonsumpcja, eksport, import, cykli, przekroczenia.
+function buildHourlyConsumption(in_) {
+  if (STATE.inputMethod === "csv" && STATE.csvProfile) {
+    return STATE.csvProfile.slice();  // klon
+  }
+  const arche = window.PROFILES.consumption[in_.archetype];
+  if (!arche) {
+    // fallback: stała moc = roczne / 8760
+    return new Array(8760).fill(in_.yearly / 8760);
+  }
+  const avgKW = in_.yearly / 8760;
+  return arche.generator.map(v => v * avgKW);  // generator znormalizowany do średniej=1
+}
+function buildHourlyPV(in_, pvKWp) {
+  if (pvKWp <= 0) return new Array(8760).fill(0);
+  const u = window.PRICING.pv.uzysk_kWh_per_kWp[in_.voivodeship] || 1000;
+  const totalKWh = pvKWp * u;
+  const pvShape = window.PROFILES.pv.polska_typowa.generator;  // suma = 1
+  return pvShape.map(v => v * totalKWh);
+}
+function buildHourlyPriceRDN(in_) {
+  // Krzywa cen RDN 8760h — średnia = priceRDN, intra-day i sezonowość z profiles.js
+  const meanRDN = (in_.energyProduct === "FIX") ? in_.priceFIX
+    : (in_.energyProduct === "SPOT" || in_.energyProduct === "CFD") ? in_.priceRDN
+    : 480;  // dla TRANSZE — średnia transze
+  return window.PROFILES.rdn.polska_typowa.generator.map(v => v * meanRDN);
+}
+
+function simulateHourly(in_, pvKWp, bessKWh, bessKW) {
+  const consumption = buildHourlyConsumption(in_);
+  const pv = buildHourlyPV(in_, pvKWp);
+  const priceRDN = buildHourlyPriceRDN(in_);
+  const buyPrice = effectiveBuyPrice(in_);  // zł/MWh — co klient płaci za kWh z sieci
+  const rcemPrice = window.PRICING.ceny_energii.RCEm_srednia_roczna_PLN_per_MWh;
+  const sellMargin = (in_.energyProduct === "SPOT" || in_.energyProduct === "CFD") ? in_.priceMarza : 0;
+
+  const dod = in_.bess_params.DOD_pct / 100;
+  const maxSOC_kWh = bessKWh * (in_.bess_params.max_SOC_pct / 100);
+  const minSOC_kWh = bessKWh * (in_.bess_params.min_SOC_pct / 100);
+  const eff = in_.bess_params.sprawnosc_round_trip_pct / 100;
+  const sqrtEff = Math.sqrt(eff);
+
+  const shavingTarget = in_.modes.includes("strażnik_mocy") ? in_.shavingTarget : 0;
+  const importLimit = shavingTarget > 0 ? in_.mocUmowna - shavingTarget : Infinity;
+
+  // Arbitraż aktywny tylko gdy:
+  //   - tryb arbitraz_tge wybrany
+  //   - taryfa pozwala (SPOT/CFD/TRANSZE) — FIX nie ma sensu dla arbitrażu
+  const arbitrageEnabled = in_.modes.includes("arbitraz_tge") && in_.energyProduct !== "FIX";
+
+  // Progi ceny dla arbitrażu (P20 i P80)
+  let priceP20 = 0, priceP80 = 0;
+  if (arbitrageEnabled) {
+    const sorted = [...priceRDN].sort((a, b) => a - b);
+    priceP20 = sorted[Math.floor(sorted.length * 0.20)];
+    priceP80 = sorted[Math.floor(sorted.length * 0.80)];
+  }
+
+  // Tablice godzinowe — eksportowane do dashboardu (dla wykresu rocznego)
+  const hConsumption = new Array(8760);
+  const hPV = new Array(8760);
+  const hCharge = new Array(8760);
+  const hDischarge = new Array(8760);
+  const hSOC = new Array(8760);
+  const hImport = new Array(8760);
+  const hExport = new Array(8760);
+  const hCostBefore = new Array(8760);  // koszt godzinowy bez instalacji
+  const hCostAfter = new Array(8760);   // koszt godzinowy z instalacją (import × cena - export × RCEm)
+
+  let SOC = bessKWh * 0.5;
+  let totalConsumption = 0, totalPV = 0;
+  let importGrid = 0, exportGrid = 0;
+  let chargeKWh = 0, dischargeKWh = 0;
+  let exceedHours = 0, exceedKWh = 0;
+  let shavingHours = 0;
+  // Arbitraż — osobne tracking (kWh × cena_godz) by wyliczyć realny zysk
+  let arbImportKWh = 0, arbImportCost = 0;
+  let arbExportKWh = 0, arbExportRev = 0;
+
+  for (let h = 0; h < 8760; h++) {
+    const c = consumption[h];
+    const p = pv[h];
+    const priceH = priceRDN[h];  // zł/MWh w tej godzinie
+    totalConsumption += c;
+    totalPV += p;
+    hConsumption[h] = c;
+    hPV[h] = p;
+    let netImport = 0, netExport = 0;
+    let chargeThis = 0, dischargeThis = 0;
+    let net = c - p;
+
+    if (net < 0) {
+      // Nadwyżka PV → ładuj BESS, reszta export
+      const surplus = -net;
+      const canCharge = Math.min(surplus, bessKW, (maxSOC_kWh - SOC) / sqrtEff);
+      if (canCharge > 0 && bessKWh > 0) {
+        SOC += canCharge * sqrtEff;
+        chargeThis = canCharge;
+        chargeKWh += canCharge;
+        netExport = surplus - canCharge;
+      } else {
+        netExport = surplus;
+      }
+    } else {
+      // Deficyt → rozładuj BESS (z PV/sieci do klienta)
+      let needed = net;
+      const dischargeCap = Math.min(bessKW, (SOC - minSOC_kWh) * sqrtEff);
+      // BESS rozładowuje się na autokonsumpcję TYLKO gdy klient ma "tradycyjny" tryb
+      // W czystym arbitrażu BESS czeka na drogie godziny (faza arbitraż niżej).
+      const useForConsumption =
+        in_.modes.includes("pv_bess_classic") ||
+        in_.modes.includes("strażnik_mocy");
+      if (bessKWh > 0 && dischargeCap > 0 && useForConsumption) {
+        if (shavingTarget > 0 && needed > importLimit) {
+          const shavingNeed = needed - importLimit;
+          const dis = Math.min(shavingNeed, dischargeCap);
+          dischargeThis = dis;
+          if (dis >= shavingNeed) shavingHours++;
+        } else {
+          dischargeThis = Math.min(needed, dischargeCap);
+        }
+        SOC -= dischargeThis / sqrtEff;
+        dischargeKWh += dischargeThis;
+        needed -= dischargeThis;
+      }
+      netImport = needed;
+      if (needed > in_.mocUmowna) {
+        exceedHours++;
+        exceedKWh += needed - in_.mocUmowna;
+      }
+    }
+
+    // ⭐ ARBITRAŻ BESS-z-sieci — działa nawet gdy klient pobiera energię
+    // Strategia: ładuj w godzinach P20 (taniej średnia roczna), rozładuj w P80
+    if (arbitrageEnabled && bessKWh > 0) {
+      const remCh = bessKW - chargeThis;
+      const remDis = bessKW - dischargeThis;
+      if (priceH <= priceP20 && SOC < maxSOC_kWh * 0.95 && remCh > 0) {
+        // Ładuj BESS z sieci — zwiększa import w tej godzinie
+        const room = (maxSOC_kWh - SOC) / sqrtEff;
+        const arbCharge = Math.min(remCh, room);
+        if (arbCharge > 0.1) {
+          SOC += arbCharge * sqrtEff;
+          chargeThis += arbCharge;
+          chargeKWh += arbCharge;
+          netImport += arbCharge;
+          arbImportKWh += arbCharge;
+          arbImportCost += arbCharge * (priceH + sellMargin) / 1000;
+        }
+      } else if (priceH >= priceP80 && SOC > minSOC_kWh * 1.5 && remDis > 0) {
+        // Rozładuj — najpierw na autokonsumpcję (uniknięty drogi zakup), potem do sieci
+        const available = (SOC - minSOC_kWh) * sqrtEff;
+        let arbDis = Math.min(remDis, available);
+        if (arbDis > 0.1) {
+          SOC -= arbDis / sqrtEff;
+          dischargeThis += arbDis;
+          dischargeKWh += arbDis;
+          if (netImport > 0) {
+            // Klient ma deficyt — BESS pokrywa (uniknięty zakup po drogiej cenie SPOT)
+            const cover = Math.min(arbDis, netImport);
+            netImport -= cover;
+            arbExportKWh += cover;
+            arbExportRev += cover * (priceH + sellMargin) / 1000;  // wartość uniknionego zakupu
+            arbDis -= cover;
+          }
+          if (arbDis > 0) {
+            // Reszta — eksport do sieci po SPOT
+            netExport += arbDis;
+            arbExportKWh += arbDis;
+            arbExportRev += arbDis * priceH / 1000;
+          }
+        }
+      }
+    }
+
+    importGrid += netImport;
+    exportGrid += netExport;
+    hCharge[h] = chargeThis;
+    hDischarge[h] = dischargeThis;
+    hImport[h] = netImport;
+    hExport[h] = netExport;
+    hSOC[h] = SOC;
+    // Koszt godzinowy: bez instalacji = c × priceH (po realnej cenie godziny)
+    hCostBefore[h] = c * priceH / 1000;
+    // Z instalacją = import × buyPrice - export × RCEm  (uproszczone — używa średnich)
+    hCostAfter[h] = netImport * buyPrice / 1000 - netExport * rcemPrice / 1000;
+  }
+
+  const autokonsumpcjaKWh = totalConsumption - importGrid + (arbExportKWh);
+  const cykliRocznie = bessKWh > 0 ? dischargeKWh / bessKWh : 0;
+  const arbitrageProfit = arbExportRev - arbImportCost;
+
+  return {
+    totalConsumption, totalPV,
+    autokonsumpcjaKWh, importGrid, exportGrid,
+    chargeKWh, dischargeKWh, cykliRocznie,
+    exceedHours, exceedKWh, shavingHours,
+    arbitrageProfit, arbImportKWh, arbExportKWh, priceP20, priceP80,
+    // godzinowe — do wykresu rocznego (agreguje się dziennie)
+    hConsumption, hPV, hCharge, hDischarge, hSOC, hImport, hExport,
+    hCostBefore, hCostAfter,
+  };
+}
+
 // =============== STRUMIENIE ===============
 function calculateStreams(in_, pvKWp, bessKWh, bessKW) {
   const Pe = window.PRICING.ceny_energii;
@@ -107,37 +313,35 @@ function calculateStreams(in_, pvKWp, bessKWh, bessKW) {
   const buyPrice = effectiveBuyPrice(in_);
   const spread = effectiveSpread(in_);
 
-  const u = window.PRICING.pv.uzysk_kWh_per_kWp[in_.voivodeship] || 1000;
-  const pvProductionKWh = pvKWp * u;
-  const auto0 = Math.min(pvProductionKWh, in_.yearly * 0.40);
-  const auto1 = bessKWh > 0
-    ? Math.min(pvProductionKWh, in_.yearly * Math.min(0.85, 0.4 + bessKWh / in_.yearly * 100))
-    : auto0;
-  const surplusKWh = Math.max(0, pvProductionKWh - auto1);
+  // ⭐ PRAWDZIWA SYMULACJA GODZINOWA 8760 h
+  const sim = simulateHourly(in_, pvKWp, bessKWh, bessKW);
+  const pvProductionKWh = sim.totalPV;
+  const surplusKWh = sim.exportGrid;
 
-  // 1. Autokonsumpcja (zawsze gdy PV) — uniknięty zakup po cenie efektywnej
-  const autokonsumpcja = auto1 * (buyPrice / 1000);
+  // 1. Autokonsumpcja — REALNE kWh z symulacji × cena efektywna
+  const autokonsumpcja = sim.autokonsumpcjaKWh * (buyPrice / 1000);
 
-  // 2. Sprzedaż RCEm
-  const rcem = in_.pvRcem ? surplusKWh * (Pe.RCEm_srednia_roczna_PLN_per_MWh / 1000) : 0;
+  // 2. Sprzedaż RCEm — REALNY eksport z symulacji
+  const rcem = in_.pvRcem ? sim.exportGrid * (Pe.RCEm_srednia_roczna_PLN_per_MWh / 1000) : 0;
 
-  // 3. Arbitraż BESS — zależy od trybu
-  const arbitrażMode = in_.modes.includes("arbitraz_tge") ? 1.1 : 0.7;
-  const cyklRocznie = in_.bess_params.cykli_rocznie * arbitrażMode;
-  const dod = in_.bess_params.DOD_pct / 100;
-  const eff = in_.bess_params.sprawnosc_round_trip_pct / 100;
-  const energiaPrzezBESS = bessKWh * cyklRocznie * dod * eff;
-  const arbitraz = energiaPrzezBESS * (spread / 1000);
+  // 3. Arbitraż BESS — REALNY zysk z symulacji godzinowej (kupuj tanio P20, sprzedaj drogo P80)
+  //    Jeśli arbitraż_tge nie wybrany albo taryfa FIX → 0 (już obsłużone w simulateHourly)
+  const arbitraz = Math.max(0, sim.arbitrageProfit);
 
   // 4. Strażnik mocy: obniżenie mocy umownej (zł/kW/m-c × 12)
   const dP = in_.modes.includes("strażnik_mocy") ? in_.shavingTarget : 0;
   const stalyTaryfy = Pe.skladnik_staly_taryfy_PLN_per_kW_miesiac[in_.tariff] || 10;
   const obnizenieMocyUmownej = dP * stalyTaryfy * 12;
 
-  // 5. Eliminacja kar — używamy rzeczywistej liczby przekroczeń (z CSV lub deklaracji)
+  // 5. Eliminacja kar — wyniki z PRAWDZIWEJ symulacji godzinowej (BESS faktycznie ścina szczyty)
   const stawkaKary = stalyTaryfy * Pe.kara_przekroczenie_mocy_mnoznik;
+  // Z symulacji wiemy ile godzin BESS pomógł obniżyć szczyt — vs ile godzin nadal jest przekroczenie
+  // baseline (bez BESS) = liczba przekroczeń którą klient zgłasza (lub z CSV)
+  // z BESS = sim.exceedHours (ile zostało po BESS)
+  const baselineExceed = in_.przekroczenia;
+  const eliminowane = Math.max(0, baselineExceed - sim.exceedHours);
   const eliminacjaKar = in_.modes.includes("strażnik_mocy")
-    ? in_.przekroczenia * dP * stawkaKary
+    ? eliminowane * dP * stawkaKary
     : 0;
 
   // 6. Reklasyfikacja K (gdy BESS jest częścią scenariusza)
@@ -153,19 +357,26 @@ function calculateStreams(in_, pvKWp, bessKWh, bessKW) {
     dsr = (bessKW / 1000) * Pr.DSR_PLN_per_MW_rocznie;
   }
 
-  // Złożenie strumieni — wszystkie pojawiają się gdy mają wartość > 0
+  // Złożenie strumieni — z tagiem BESS-zależności (do realnego cashflow degradującego)
+  // bessDeg = true: strumień maleje liniowo z degradacją BESS (1-deg)^y
+  // bessDeg = false: strumień tylko eskaluje z cenami, nie maleje (np. obniżenie mocy umownej)
   const items = [
-    { label: "Autokonsumpcja PV",        value: autokonsumpcja },
-    { label: "Sprzedaż nadwyżek RCEm",   value: rcem },
-    { label: "Arbitraż BESS dzień/noc",  value: arbitraz },
-    { label: "Obniżenie mocy umownej",   value: obnizenieMocyUmownej },
-    { label: "Eliminacja kar",           value: eliminacjaKar },
-    { label: "Reklasyfikacja opł. mocowej (K)", value: oszczednoscK },
-    { label: "Rynek Mocy",               value: rynekMocy },
-    { label: "DSR / aFRR",               value: dsr },
+    { label: "Autokonsumpcja PV",        value: autokonsumpcja,        bessDeg: bessKWh > 0 },
+    { label: "Sprzedaż nadwyżek RCEm",   value: rcem,                  bessDeg: bessKWh > 0 },
+    { label: "Arbitraż BESS dzień/noc",  value: arbitraz,              bessDeg: true },
+    { label: "Obniżenie mocy umownej",   value: obnizenieMocyUmownej,  bessDeg: false },
+    { label: "Eliminacja kar",           value: eliminacjaKar,         bessDeg: false },
+    { label: "Reklasyfikacja opł. mocowej (K)", value: oszczednoscK,   bessDeg: false },
+    { label: "Rynek Mocy",               value: rynekMocy,             bessDeg: false },
+    { label: "DSR / aFRR",               value: dsr,                   bessDeg: true },
   ].filter(it => it.value > 0);
 
-  return { items, totalYearly: items.reduce((s, it) => s + it.value, 0), pvProductionKWh, surplusKWh, buyPrice };
+  return {
+    items,
+    totalYearly: items.reduce((s, it) => s + it.value, 0),
+    pvProductionKWh, surplusKWh, buyPrice,
+    sim,  // ⭐ udostępniamy wyniki symulacji godzinowej do dashboardu
+  };
 }
 
 // =============== KALKULACJA GŁÓWNA ===============
@@ -214,10 +425,14 @@ function calculate(in_) {
   cashflow.push({ year: 0, cf: -capexPoDotacji, cumulative });
   const yearlyOpex = (pvCapex * Pf.opex_PV_pct_rocznie + bessCapex * Pf.opex_BESS_pct_rocznie) / 100;
 
+  // Realny cashflow: rozdziel strumienie BESS-zależne (degradują) od niezależnych (tylko eskalują)
   for (let y = 1; y <= Pf.horyzont_lat; y++) {
     const escalation = Math.pow(1 + Pf.eskalacja_cen_energii_pct_rocznie / 100, y - 1);
     const degradacja = Math.pow(1 - in_.bess_params.degradacja_rocznie_pct / 100, y - 1);
-    const yearlySavings = streams.totalYearly * escalation * degradacja;
+    let yearlySavings = 0;
+    for (const it of streams.items) {
+      yearlySavings += it.value * escalation * (it.bessDeg ? degradacja : 1);
+    }
     const yearlyOpexEsc = yearlyOpex * escalation;
     const cf = yearlySavings - yearlyOpexEsc;
     const prev = cumulative;
@@ -373,7 +588,21 @@ function gatherInputs() {
   };
 }
 
-let chartStreams, chartCashflow, chartDaily;
+let chartStreams, chartCashflow, chartDaily, chartYearlyEnergy, chartYearlyCost;
+
+// Agregacja 8760 godzin do 12 miesięcy (suma)
+function aggregateMonthly(arr) {
+  const days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  const out = new Array(12).fill(0);
+  let h = 0;
+  for (let m = 0; m < 12; m++) {
+    const hours = days[m] * 24;
+    for (let i = 0; i < hours && h < 8760; i++, h++) {
+      out[m] += arr[h];
+    }
+  }
+  return out;
+}
 
 function renderResults(r, in_) {
   document.getElementById("hero-client").textContent = in_.clientName || "Klient bez nazwy";
@@ -393,15 +622,23 @@ function renderResults(r, in_) {
   document.getElementById("kpi-capex").textContent = fmt.plnK(r.capex.poDotacji);
   document.getElementById("kpi-capex-sub").textContent = "brutto VAT: " + fmt.plnK(r.capex.poDotacji * 1.23);
 
+  const sim = r.streams.sim;
+  const autokRatio = sim.totalConsumption > 0 ? (sim.autokonsumpcjaKWh / sim.totalConsumption * 100).toFixed(0) : 0;
+  const pvUsageRatio = sim.totalPV > 0 ? ((sim.totalPV - sim.exportGrid) / sim.totalPV * 100).toFixed(0) : 0;
   document.getElementById("config-summary").innerHTML = `
     <div><div class="text-xs text-slate-500">Moc PV</div><div class="font-semibold">${r.sizing.pvKWp} kWp</div></div>
     <div><div class="text-xs text-slate-500">Pojemność BESS</div><div class="font-semibold">${r.sizing.bessKWh} kWh</div></div>
     <div><div class="text-xs text-slate-500">Moc BESS</div><div class="font-semibold">${r.sizing.bessKW} kW</div></div>
     <div><div class="text-xs text-slate-500">Województwo / taryfa</div><div class="font-semibold">${in_.voivodeship} / ${in_.tariff}</div></div>
     <div><div class="text-xs text-slate-500">Zużycie roczne</div><div class="font-semibold">${fmt.kWh(in_.yearly)}</div></div>
+    <div><div class="text-xs text-slate-500">Produkcja PV</div><div class="font-semibold">${fmt.kWh(sim.totalPV)}</div></div>
+    <div><div class="text-xs text-slate-500">Autokonsumpcja</div><div class="font-semibold">${autokRatio}% zużycia · ${pvUsageRatio}% PV</div></div>
+    <div><div class="text-xs text-slate-500">Cykli BESS rocznie</div><div class="font-semibold">${Math.round(sim.cykliRocznie)}</div></div>
+    <div><div class="text-xs text-slate-500">Eksport do sieci</div><div class="font-semibold">${fmt.kWh(sim.exportGrid)}</div></div>
+    <div><div class="text-xs text-slate-500">Import z sieci</div><div class="font-semibold">${fmt.kWh(sim.importGrid)}</div></div>
+    <div><div class="text-xs text-slate-500">Przekroczenia mocy umownej</div><div class="font-semibold ${sim.exceedHours > 0 ? 'text-red-700' : 'text-emerald-700'}">${sim.exceedHours} h/rok</div></div>
     <div><div class="text-xs text-slate-500">Cena energii efektywna</div><div class="font-semibold">${Math.round(r.streams.buyPrice)} zł/MWh</div></div>
     <div><div class="text-xs text-slate-500">Profil</div><div class="font-semibold">${in_.archetype === "csv" ? "Z licznika (CSV)" : in_.archetype}</div></div>
-    <div><div class="text-xs text-slate-500">Klient</div><div class="font-semibold">${in_.clientName || "—"}</div></div>
   `;
 
   document.getElementById("streams-table").innerHTML = `
@@ -465,6 +702,68 @@ function renderResults(r, in_) {
     options: { responsive: true,
       scales: { y: { ticks: { callback: v => fmt.plnK(v) } } },
       plugins: { legend: { display: false } } },
+  });
+
+  // ====== WYKRES ROCZNY — 12 miesięcy, dwa panele ======
+  const monthLabels = ["Sty","Lut","Mar","Kwi","Maj","Cze","Lip","Sie","Wrz","Paź","Lis","Gru"];
+
+  // Agregacja: konsumpcja, PV, rozładowanie BESS, import (z sieci), eksport
+  const mC = aggregateMonthly(sim.hConsumption);
+  const mPV = aggregateMonthly(sim.hPV);
+  const mDis = aggregateMonthly(sim.hDischarge);
+  const mImp = aggregateMonthly(sim.hImport);
+  const mExp = aggregateMonthly(sim.hExport);
+
+  // Pokrycie zużycia: rozdzielamy zużycie na 3 źródła
+  // - autokonsumpcja PV bezpośrednio (PV trafia do zużycia w tej godzinie, zanim BESS się załączy)
+  // - rozładowanie BESS (zaspokaja zużycie z czasem)
+  // - import z sieci
+  const mAutoPV = mC.map((c, i) => Math.max(0, c - mImp[i] - mDis[i]));  // PV bezpośrednio = zużycie - import - BESS
+
+  if (chartYearlyEnergy) chartYearlyEnergy.destroy();
+  chartYearlyEnergy = new Chart(document.getElementById("chart-yearly-energy"), {
+    type: "bar",
+    data: {
+      labels: monthLabels,
+      datasets: [
+        { label: "Z sieci (zakup)",      data: mImp,    backgroundColor: "#ef4444", stack: "src", yAxisID: "y" },
+        { label: "Autokonsumpcja PV",    data: mAutoPV, backgroundColor: "#10b981", stack: "src", yAxisID: "y" },
+        { label: "Z BESS",               data: mDis,    backgroundColor: "#F59E0B", stack: "src", yAxisID: "y" },
+        { label: "Eksport po RCEm",      data: mExp.map(v => -v), backgroundColor: "rgba(55,101,173,0.6)", borderColor: "#3765AD", stack: "exp", yAxisID: "y", type: "bar" },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { title: { display: true, text: "kWh / miesiąc" }, stacked: false,
+             ticks: { callback: v => Math.abs(v).toLocaleString("pl-PL") } },
+      },
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10 } } } },
+    },
+  });
+
+  // Drugi wykres — koszt: bez instalacji vs z instalacją
+  const mCostBefore = aggregateMonthly(sim.hCostBefore);
+  const mCostAfter = aggregateMonthly(sim.hCostAfter);
+  if (chartYearlyCost) chartYearlyCost.destroy();
+  chartYearlyCost = new Chart(document.getElementById("chart-yearly-cost"), {
+    type: "bar",
+    data: {
+      labels: monthLabels,
+      datasets: [
+        { label: "Koszt BEZ instalacji",   data: mCostBefore, backgroundColor: "#ef4444" },
+        { label: "Koszt Z instalacją",     data: mCostAfter,  backgroundColor: "#10b981" },
+      ],
+    },
+    options: {
+      responsive: true,
+      scales: {
+        y: { title: { display: true, text: "zł / miesiąc" },
+             ticks: { callback: v => Math.round(v).toLocaleString("pl-PL") } },
+      },
+      plugins: { legend: { position: "bottom", labels: { boxWidth: 12, font: { size: 10 } } },
+        tooltip: { callbacks: { label: c => c.dataset.label + ": " + Math.round(c.parsed.y).toLocaleString("pl-PL") + " zł" } } },
+    },
   });
 
   // Daily — symulacja dla typowego dnia
