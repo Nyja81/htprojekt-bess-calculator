@@ -2,3 +2,8 @@
 node_modules/
 *.log
 .vercel
+
+# ⛔ Sekrety lokalne — token GitHub dla sesji Claude (NIGDY do repo)
+.gh-token
+.gh-token.*
+**/.gh-token
