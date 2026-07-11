@@ -1,0 +1,52 @@
+{
+  "run_date": "2026-05-08",
+  "seed": 20260608,
+  "n_simulations": 1000,
+  "scenario": {
+    "yearly_kWh": 200000,
+    "K_coefficient": "K3",
+    "bess_kWh": 300,
+    "pv_kWp": 150,
+    "voivodeship": "wielkopolskie",
+    "capex_PLN_netto": 1273464,
+    "horizon_years": 15,
+    "discount_pct": 8.0,
+    "dotacja": "BEZ_DOTACJI (worst case)"
+  },
+  "stochastic_inputs": {
+    "escalation_pct": {
+      "distribution": "normal",
+      "mu": 5.0,
+      "sigma": 3.0
+    },
+    "rcem_2026_PLN_per_MWh": {
+      "distribution": "normal",
+      "mu": 280,
+      "sigma": 80
+    },
+    "spread_arbitraz_PLN_per_MWh": {
+      "distribution": "normal",
+      "mu": 250,
+      "sigma": 80
+    },
+    "degradation_pct": {
+      "distribution": "uniform",
+      "min": 2.5,
+      "max": 3.5
+    }
+  },
+  "results": {
+    "successful_runs": 982,
+    "infinite_payback_runs": 18,
+    "median_payback_years": 10.23,
+    "mean_payback_years": 10.44,
+    "percentiles": {
+      "P5": 8.49,
+      "P25": 9.36,
+      "P50": 10.23,
+      "P75": 11.27,
+      "P95": 13.13
+    },
+    "p_payback_under_6_years_pct": 0.0
+  }
+}
