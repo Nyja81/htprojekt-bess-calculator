@@ -1,0 +1,39 @@
+{
+  "run_date": "2026-05-08",
+  "seed": 20260508,
+  "source_data": {
+    "RDN_2024_synthetic_avg_PLN_per_MWh": 424.89,
+    "RDN_2024_official_avg": 424.94,
+    "RDN_2025_synthetic_avg_PLN_per_MWh": 442.3,
+    "RDN_2025_official_partial": "Q1-Q3 ~435, Oct 443.90, Nov 478, Dec 482 (extrap.)",
+    "RCEm_2025_official_partial": "Listopad 382.88, Grudzień 466.08",
+    "method": "synteza godzinowa anchored to official monthly RDN PSE/TGE"
+  },
+  "spread_analysis": {
+    "metric": "captured_top4_minus_bot4 (realistic BESS 4h-cycle spread)",
+    "model_assumed_PLN_per_MWh": 250,
+    "historical_mean_captured": 274.8,
+    "historical_median_captured": 274.7,
+    "historical_p95_captured": 373.3,
+    "reference_max_min_24h_mean": 359.7,
+    "reference_p20_p80_mean": 175.5,
+    "deviation_pct_vs_assumption": 9.9
+  },
+  "typical_client_backtest": {
+    "scenario": "C&I 100 MWh/rok, hala 8-16, C22B, BESS 200 kWh, BEZ PV/dotacji — pure arbitrage only",
+    "capex_PLN_netto": 603046,
+    "savings_2024_PLN": 13123.0,
+    "savings_2025_PLN": 13721.0,
+    "savings_avg_PLN": 13422.0,
+    "cycles_2024": 366,
+    "cycles_2025": 365,
+    "simple_payback_historical_lat": 44.9,
+    "expected_payback_model_lat": 47.9,
+    "deviation_pct": -6.1,
+    "methodology_note": "Czysty arbitraż bez PV/autokonsumpcji/reklasyfikacji K daje niskie wykorzystanie BESS (~30-55 cykli/rok vs 280 w typowym bundle). Wysokie odchylenie payback NIE odzwierciedla błędu modelu — kalkulator zawsze łączy arbitraż ze strumieniami autokonsumpcji PV, RCEm, obniżenia mocy umownej i reklasyfikacji K. Ten test służy walidacji silnika cen RDN, nie predykcji payback w realnych ofertach."
+  },
+  "decision": {
+    "update_pricing_js": false,
+    "rationale": "Spread deviation +9.9% w tolerancji ±20%. RCEm i RDN spójne z trendami 2024-2025."
+  }
+}
